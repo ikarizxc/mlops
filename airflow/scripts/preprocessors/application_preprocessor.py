@@ -1,8 +1,7 @@
 import logging
-import numpy as np
 import pandas as pd
 
-from src.base_preprocessor import BasePreprocessor
+from scripts.preprocessors.base_preprocessor import BasePreprocessor
 
 _logger = logging.getLogger(__name__)
 
