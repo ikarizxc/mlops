@@ -8,7 +8,7 @@ _logger = logging.getLogger(__name__)
 
 def validate_data_loaded() -> None:
     """
-    Validation task: проверяет целостность данных после загрузки (непустая таблица, корректные типы).
+    Validation task: проверяет целостность данных после загрузки (непустая таблица).
     """
     db_url = os.environ["DATABASE_URL"]
     engine = create_engine(db_url)

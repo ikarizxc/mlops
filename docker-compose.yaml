@@ -49,16 +49,16 @@ x-airflow-common:
   # In order to add custom dependencies or upgrade provider distributions you can use your extended image.
   # Comment the image line, place your Dockerfile in the directory where you placed the docker-compose.yaml
   # and uncomment the "build" line below, Then run `docker-compose build` to build the images.
-  image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:3.0.2}
-  # build: .
+  # image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:3.0.2}
+  build: .
   environment:
     &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: >-
-      postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+      postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres/${POSTGRES_DB:-database}
     AIRFLOW__CELERY__RESULT_BACKEND: >-
-      db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+      db+postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres/${POSTGRES_DB:-database}
     AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
     AIRFLOW__CORE__FERNET_KEY: ''
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
@@ -74,13 +74,18 @@ x-airflow-common:
     _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-}
     # The following line can be used to set a custom config file, stored in the local config folder
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
-    PYTHONPATH: "/opt/airflow/scripts:${PYTHONPATH}"
+    PYTHONPATH: "/opt/airflow:${PYTHONPATH}"
+    MLFLOW_TRACKING_URI: "http://mlflow-service:5000"
+    MLFLOW_S3_ENDPOINT_URL: ${MLFLOW_S3_ENDPOINT_URL}
+    AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+    AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+    AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
   volumes:
-    - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
-    - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
-    - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
-    - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
-    - ${AIRFLOW_PROJ_DIR:-.}/scripts:/opt/airflow/scripts
+    - ${AIRFLOW_PROJ_DIR:-./}/dags:/opt/airflow/dags
+    - ${AIRFLOW_PROJ_DIR:-./}/logs:/opt/airflow/logs
+    - ${AIRFLOW_PROJ_DIR:-./}/config:/opt/airflow/config
+    - ${AIRFLOW_PROJ_DIR:-./}/plugins:/opt/airflow/plugins
+    - ${AIRFLOW_PROJ_DIR:-./}/scripts:/opt/airflow/scripts
     - /var/run/docker.sock:/var/run/docker.sock
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
@@ -94,13 +99,13 @@ services:
   postgres:
     image: postgres:17
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-database}
     volumes:
       - postgres-db-volume:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}"]
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER:-postgres}"]
       interval: 10s
       retries: 5
       start_period: 5s
@@ -341,6 +346,28 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
+  mlflow-service:
+    image: ghcr.io/mlflow/mlflow:latest
+    environment:
+      MLFLOW_S3_ENDPOINT_URL: ${MLFLOW_S3_ENDPOINT_URL}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
+      BUCKET_NAME: ${BUCKET_NAME}
+    command:
+      - bash
+      - -c
+      - |
+        pip install boto3 --quiet
+        mlflow server --host 0.0.0.0 \
+            --default-artifact-root s3://${BUCKET_NAME}/mlflow --serve-artifacts
+    expose:
+      - "5000"
+    ports:
+      - "${MLFLOW_SERVICE_PORT:-5000}:5000"
+    volumes:
+      - mlflow-data:/mlflow
+
   data-preparation-task-container:
     build:
       context: .
@@ -349,3 +376,4 @@ services:
 
 volumes:
   postgres-db-volume:
+  mlflow-data:

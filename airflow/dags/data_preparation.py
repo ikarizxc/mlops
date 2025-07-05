@@ -5,6 +5,7 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from pendulum import today
+from sqlalchemy import create_engine
 
 from scripts.preprocessors.application_preprocessor import ApplicationPreprocessor
 
@@ -15,6 +16,8 @@ args = {
     "email": ["sergey.sviridyuk.41@gmail.com"],
     'email_on_failure': False,
 }
+
+table_name = 'train_data'
 
 dag = DAG(
     dag_id="data_preparation",
@@ -53,8 +56,7 @@ def extract_raw_data(**kwargs) -> str:
     df: pd.DataFrame = postgres_hook.get_pandas_df(sql=sql)
     _logger.info(f"Loaded {len(df)} rows from 'application_train'")
     
-    # мб в s3 загружать
-    temp_directory = 'opt/airflow/tmp'
+    temp_directory = '/opt/airflow/tmp'
     os.makedirs(temp_directory, exist_ok=True)
     
     temp_path = f"{temp_directory}/raw_data.parquet"
@@ -70,7 +72,7 @@ def transform_data(**kwargs) -> str:
         str: путь к созданному файлу Parquet с преобразованными данными.
     """
     ti = kwargs['ti']
-    path = ti.xcom_pull(task_ids="task_extract_raw_data")
+    path = ti.xcom_pull(task_ids="extract_raw_data")
     
     df = pd.read_parquet(path)
     
@@ -96,7 +98,7 @@ def transform_data(**kwargs) -> str:
     
     _logger.info("Data successfuly transformed")
     
-    temp_path = "opt/airflow/tmp/transformed_data.parquet"
+    temp_path = "/opt/airflow/tmp/transformed_data.parquet"
     df.to_parquet(temp_path, index=False)
     _logger.info(f"Transformed data temporary saved to '{temp_path}'")
 
@@ -107,15 +109,14 @@ def load_to_train_table(**kwargs) -> None:
     Load task: считывает преобразованные данные и записывает их в таблицу 'train_data' в Postgres.
     """    
     ti = kwargs['ti']
-    path = ti.xcom_pull(task_ids="task_transform_data")
+    path = ti.xcom_pull(task_ids="transform_data")
     
     _logger.info(f"Path to transformed data file: {path}")
     
     df = pd.read_parquet(path)
     
-    postgres_hook = PostgresHook(postgres_conn_id='home-credit-default-risk')
-    engine = postgres_hook.get_sqlalchemy_engine()
-    table_name = 'train_data'
+    hook = PostgresHook(postgres_conn_id='home-credit-default-risk')
+    engine = hook.get_sqlalchemy_engine()
     
     _logger.info(f"Starting to write {len(df)} rows to '{table_name}'")
 
@@ -124,46 +125,48 @@ def load_to_train_table(**kwargs) -> None:
         con=engine,
         if_exists='replace',
         index=False,
-        chunksize=1000
+        chunksize=1000,
+        method='multi',
     )
-    _logger.info(f"Wrote {len(df)} rows to 'target_table'")
+    _logger.info(f"Wrote {len(df)} rows to '{table_name}'")
 
 def validate_loaded_data(**kwargs) -> None:
     """
-    Validation task: проверяет целостность данных после загрузки (непустая таблица, корректные типы).
+    Validation task: проверяет целостность данных после загрузки (непустая таблица).
     """
     hook = PostgresHook(postgres_conn_id='home-credit-default-risk')
-    df = hook.get_pandas_df(sql="SELECT COUNT(*) AS cnt FROM train_data;")
+    df = hook.get_pandas_df(sql=f"SELECT COUNT(*) AS cnt FROM {table_name};")
     cnt = int(df.loc[0, 'cnt'])
     if cnt < 1:
-        raise ValueError("Validation error: 'train_data' table is empty.")
+        raise ValueError(f"Validation error: '{table_name}' table is empty.")
     _logger.info(f"Validation OK: {cnt} rows")
 
 check_db_connection_operator = PythonOperator(
-    task_id='task_check_db_connection',
+    task_id='check_db_connection',
     python_callable=check_db_connection,
     dag=dag
 )
 
 extract_raw_data_operator = PythonOperator(
-    task_id='task_extract_raw_data',
+    task_id='extract_raw_data',
     python_callable=extract_raw_data,
     dag=dag
 )
+
 transform_data_operator = PythonOperator(
-    task_id='task_transform_data',
+    task_id='transform_data',
     python_callable=transform_data,
     dag=dag
 )
 
 load_to_train_table_operator = PythonOperator(
-    task_id='task_load_to_train_table',
+    task_id='load_to_train_table',
     python_callable=load_to_train_table,
     dag=dag
 )
 
 validate_loaded_data_operator = PythonOperator(
-    task_id='task_validate_loaded_data',
+    task_id='validate_loaded_data',
     python_callable=validate_loaded_data,
     dag=dag
 )

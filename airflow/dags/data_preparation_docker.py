@@ -1,5 +1,4 @@
 import os
-import logging
 from airflow import DAG
 from airflow.providers.docker.operators.docker import DockerOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
@@ -16,7 +15,7 @@ with DAG(
     default_args=args,
     max_active_runs=1,
     max_active_tasks=3,
-    schedule="@daily",
+    schedule=None,
     start_date=today("UTC").subtract(days=1),
     tags=["data", "preprocessing", "docker"],
 ) as dag:
@@ -33,7 +32,7 @@ with DAG(
     
     # --- CHECK CONNECTION TASK ---
     check_db_connection_operator = DockerOperator(
-        task_id="task_check_db_connection",
+        task_id="check_db_connection",
         image=image_name,
         auto_remove='success',
         mount_tmp_dir=False,
@@ -47,7 +46,7 @@ with DAG(
 
     # --- EXTRACT TASK ---
     extract_raw_data_operator = DockerOperator(
-        task_id="task_extract_raw_data",
+        task_id="extract_raw_data",
         image=image_name,
         auto_remove='success',
         mount_tmp_dir=False,
@@ -64,7 +63,7 @@ with DAG(
     
     # --- TRANSFORM TASK ---
     transform_data_operator = DockerOperator(
-        task_id="task_transform_data",
+        task_id="transform_data",
         image=image_name,
         auto_remove='success',
         mount_tmp_dir=False,
@@ -78,7 +77,7 @@ with DAG(
         
     # --- LOAD TASK ---
     load_to_train_table_operator = DockerOperator(
-        task_id="task_load_to_train_table",
+        task_id="load_to_train_table",
         image=image_name,
         auto_remove='success',
         mount_tmp_dir=False,
@@ -95,7 +94,7 @@ with DAG(
     
     # --- VALIDATE DATA TASK ---
     validate_loaded_data_operator = DockerOperator(
-        task_id="task_validate_loaded_data",
+        task_id="validate_loaded_data",
         image=image_name,
         auto_remove='success',
         mount_tmp_dir=False,
