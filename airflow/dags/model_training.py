@@ -165,8 +165,9 @@ def train_model(**kwargs) -> dict:
         run_id = run.info.run_id
         mlflow.catboost.log_model(
             classifier, 
-            "catboost", 
+            "model", 
             signature=sig,
+            input_example=X_val.head(5),
             run_id=run_id)
     
     out['run_id'] = run_id
@@ -201,6 +202,7 @@ def log_artifacts(**kwargs):
     """
     ti = kwargs['ti']
     run_info = ti.xcom_pull(task_ids="train_model")
+    run_id = run_info['run_id']
     metrics = run_info['metrics']
     feature_importances = run_info['feature_importances']
 
@@ -211,14 +213,19 @@ def log_artifacts(**kwargs):
     # Важность признаков
     fi = feature_importances['values']
     names = feature_importances['names']
+    
+    sorted_idx = sorted(range(len(fi)), key=lambda i: fi[i], reverse=True)
+    names_sorted = [names[i] for i in sorted_idx]
+    fi_sorted    = [fi[i]    for i in sorted_idx]
+    
     fig, ax = plt.subplots(figsize=(6, max(4, len(fi) * 0.3)))
-    ax.barh(names, fi)
+    ax.barh(names_sorted, fi_sorted)
     ax.set_title("Важность признаков")
     fi_path = os.path.join(artifacts_dir, 'feature_importance.png')
     fig.tight_layout()
     fig.savefig(fi_path)
     plt.close(fig)
-    mlflow.log_artifact(fi_path, artifact_path="plots")
+    mlflow.log_artifact(fi_path, artifact_path="plots", run_id=run_id)
 
     # ROC-кривая
     fpr = metrics['fpr']
@@ -234,24 +241,49 @@ def log_artifacts(**kwargs):
     fig.tight_layout()
     fig.savefig(roc_path)
     plt.close(fig)
-    mlflow.log_artifact(roc_path, artifact_path="plots")
+    mlflow.log_artifact(roc_path, artifact_path="plots", run_id=run_id)
 
 def register_best_model(**kwargs):
-    """
-    Регистрирует лучшую модель CatBoost в MLflow Model Registry под именем 'Catboost'.
+    ti = kwargs["ti"]
+    # Берём последний run_id и метрику roc_auc из XCom
+    last_info = ti.xcom_pull(task_ids="train_model")
+    last_run_id = last_info["run_id"]
+    last_auc = last_info["metrics"]["roc_auc"]
 
-    Аргументы:
-        **kwargs: аргументы Airflow, содержит объект ti для XCom.
-    """
-    mlflow_run_id = kwargs["ti"].xcom_pull(task_ids="train_model")["run_id"]
     client = mlflow.tracking.MlflowClient()
-    client.create_registered_model("Catboost")
-    client.create_model_version(
-        name="Catboost",
-        source=f"runs:/{mlflow_run_id}/model",
-        run_id=mlflow_run_id,
-    )
-    _logger.info("Версия модели зарегистрирована!")
+    model_name = "Catboost"
+
+    # 1) Убедимся, что модель зарегистрирована (если нет — создадим)
+    try:
+        client.get_registered_model(model_name)
+    except mlflow.MlflowException:
+        client.create_registered_model(model_name)
+
+    # 2) Перебираем все версии и находим максимальный roc_auc
+    best_run_id = last_run_id
+    best_auc = last_auc
+
+    # Получаем все версии модели
+    versions = client.get_latest_versions(model_name)
+    for v in versions:
+        info = client.get_run(v.run_id)
+        metrics = info.data.metrics
+        auc = metrics.get("roc_auc", None)
+        if auc is not None and auc > best_auc:
+            best_auc = auc
+            best_run_id = v.run_id
+
+    # 3) Если текущий run действительно лучший, создаём новую версию
+    #    Иначе — можно просто перейти к лучшей
+    if best_run_id == last_run_id:
+        client.create_model_version(
+            name=model_name,
+            source=f"runs:/{last_run_id}/model",
+            run_id=last_run_id,
+        )
+        _logger.info(f"Новая версия зарегистрирована для лучшего запуска {last_run_id} (AUC={best_auc:.4f})")
+    else:
+        _logger.info(f"Существующая версия для запуска {best_run_id} (AUC={best_auc:.4f}) лучше, чем текущий {last_run_id} (AUC={last_auc:.4f}), регистрация не нужна")
     
 get_train_data_operator = PythonOperator(
     task_id="get_train_data",

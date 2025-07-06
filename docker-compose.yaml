@@ -358,7 +358,6 @@ services:
       - bash
       - -c
       - |
-        pip install boto3 --quiet
         mlflow server --host 0.0.0.0 \
             --default-artifact-root s3://${BUCKET_NAME}/mlflow --serve-artifacts
     expose:
