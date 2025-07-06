@@ -214,7 +214,7 @@ def log_artifacts(**kwargs):
     fi = feature_importances['values']
     names = feature_importances['names']
     
-    sorted_idx = sorted(range(len(fi)), key=lambda i: fi[i], reverse=True)
+    sorted_idx = sorted(range(len(fi)), key=lambda i: fi[i], reverse=False)
     names_sorted = [names[i] for i in sorted_idx]
     fi_sorted    = [fi[i]    for i in sorted_idx]
     
